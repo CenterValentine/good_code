@@ -1,0 +1,103 @@
+
+const fs = require('fs');
+const request = require('request-promise');
+
+const fileArg = process.argv.indexOf('-f');
+const tokenArg = process.argv.indexOf('-t');
+const idArg = process.argv.indexOf('-i');
+
+if(fileArg === -1) throw new Error('File path required');
+if(tokenArg === -1) throw new Error('Access token required')
+if(idArg === -1) throw new Error('Inst id required')
+
+const FILE = process.argv[fileArg + 1]
+const TOKEN = process.argv[tokenArg + 1]
+const INSTITUTION_ID = process.argv[idArg + 1]
+const IS_CREATE = process.argv.includes('-c');
+const API_URL = process.env.DEBUG ? 'http://localhost:4000' : 'https://api.foxy.com';
+
+const content = fs.readFileSync(FILE, 'utf-8')
+const rows = content.split('\n');
+
+const postData = [];
+
+rows.forEach(row => {
+  row = row.trim();
+  const items = row.split(',').map(i => i.trim());
+
+  if(items.length < 4) {
+    console.log(`Skip, too short: ${row}`);
+    return;
+  }
+  if (!items[0] || !items[0].includes('@')) {
+    console.log(`Skip, no email: ${row}`);
+    return;
+  }
+  if(!items[1]) {
+    console.log(`Skip, no first name: ${row}`);
+    return;
+  }
+  if(!items[2]) {
+    console.log(`Skip, no last name: ${row}`);
+    return;
+  }
+  if(!items[3]) {
+    console.log(`Skip, no room name: ${row}`);
+    return;
+  }
+
+  postData.push({
+    action: IS_CREATE ? 'create' : 'invite',
+    email: items[0],
+    firstName: items[1],
+    lastName: items[2],
+    roomN: items[3]
+  });
+});
+
+request(`${API_URL}/api/institutions/${INSTITUTION_ID}`).then(institution => {
+  institution = JSON.parse(institution)
+
+  console.log('');
+  console.log(`You are about to ${IS_CREATE ? 'create' : 'invite'} ${postData.length} users against "${institution.name}"`);
+  console.log(`From file: ${FILE}`);
+  console.log('Press "y" to continue');
+  console.log('')
+
+  process.stdin.setEncoding('ascii')
+  process.stdin.setRawMode(true)
+  process.stdin.once('data', async (key) => {
+    if (key !== 'y') {
+      console.log('Aborted');
+      process.exit();
+    }
+    console.log('Sending data...');
+
+    const options = {
+      method: 'POST',
+      uri: `${API_URL}/api/institutions/${INSTITUTION_ID}/addUsersBatch`,
+      body: {userData: postData},
+      json: true,
+      headers: {
+        authorization: TOKEN
+      }
+    };
+
+    const response = await request(options);
+
+    console.log(IS_CREATE ? 'Users created' : 'Invitations sent');
+
+    if(process.argv.includes('-v')) {
+      console.log('');
+      console.log('Response:');
+      console.log(response);
+    }
+
+    process.exit();
+  })
+});
+
+process.on('unhandledRejection', err => {
+  console.error(err.error)
+  process.exit();
+})
